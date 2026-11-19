@@ -1,0 +1,1 @@
+</section><footer class="site-credit">Concepteur: Patrick Pilgrim Soft; +243976959084</footer></main><script src="assets/app.js"></script></body></html>

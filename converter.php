@@ -1,0 +1,6 @@
+<?php require_once 'config.php';require_login();$rate=(float)setting('exchange_rate','2800');$page_title='Convertisseur USD / FC';include 'partials/header.php';?>
+<div class="panel"><h2>Conversion automatique Dollar ⇄ Franc congolais</h2><p>Taux appliqué : 1 USD = <?=money($rate,'FC')?>. L'administrateur peut modifier ce taux dans Paramètres.</p>
+<div class="form-grid"><div><label>Montant en dollars (USD)</label><input id="usd" type="number" min="0" step="0.01" placeholder="Saisir le montant en USD"></div><div><label>Équivalent en francs congolais (FC)</label><input id="fc" type="number" min="0" step="1" placeholder="Saisir le montant en FC"></div></div>
+<p class="conversion-note">La saisie dans l'un des champs calcule immédiatement l'autre montant. Le taux utilisé est <?=h(number_format($rate,2,',',' '))?> FC pour 1 USD.</p></div>
+<script>const rate=<?=json_encode($rate)?>,usd=document.getElementById('usd'),fc=document.getElementById('fc');usd.addEventListener('input',()=>{fc.value=usd.value===''?'':(Number(usd.value)*rate).toFixed(2)});fc.addEventListener('input',()=>{usd.value=fc.value===''?'':(Number(fc.value)/rate).toFixed(2)});</script>
+<?php include 'partials/footer.php';?>
