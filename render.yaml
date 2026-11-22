@@ -3,6 +3,8 @@ services:
     name: germe-de-david
     runtime: docker
     plan: free
+    healthCheckPath: /health.php
+    autoDeploy: true
     envVars:
       - key: DB_HOST
         sync: false

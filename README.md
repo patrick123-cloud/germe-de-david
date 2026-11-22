@@ -50,3 +50,10 @@ Tester l'application sur une copie de la base avant utilisation réelle. Faire d
 ## Catégories de transactions
 
 Les catégories peuvent maintenant être choisies à la saisie d'une recette ou d'une dépense. La liste est filtrée par compte et par type (recette/dépense). La catégorie reste facultative pour préserver la compatibilité avec les anciennes écritures.
+
+## Version 2 — offrandes par mois et performances
+
+- **Offrandes par mois et par libellé** (`offrandes.php`, menu « Offrandes par mois ») : somme de chaque libellé pour un mois ou toute l'année, recherche d'un libellé, calcul mensuel (solde du mois et solde cumulé), tableau libellé × 12 mois et export CSV. Les libellés identiques (majuscules/espaces) sont additionnés ; USD et FC restent séparés.
+- **Correction** : le « solde cumulé » du modèle Offrandes ordinaires comptait deux fois les mois précédents ; le solde cumulé des Offrandes spéciales partait du solde de début d'année au lieu du début du mois.
+- **Rapidité** : le tableau de bord passe d'environ 250 requêtes SQL à 7, les rapports d'environ 630 à 11 ; la liste des opérations ne fait plus une requête par ligne. Requêtes préparées émulées (1 aller-retour réseau par requête vers TiDB ; `DB_EMULATE=0` pour désactiver), OPcache, compression gzip, cache navigateur des CSS/JS/images, `health.php` pour le contrôle de santé Render.
+- Base existante : exécuter une seule fois `tidb_upgrade_v2.sql` (nouvel index). Voir `GUIDE_DEPLOIEMENT.md`.

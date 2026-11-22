@@ -1,0 +1,69 @@
+<?php
+// Offrandes : calcul mensuel + somme par libellé (mois, année) — une seule requête groupée, calculs en mémoire.
+require_once 'config.php';require_login();$pdo=db();
+$accounts=active_accounts();
+$defaultAccount=0;foreach($accounts as $a)if($a['name']==='Offrandes ordinaires'){$defaultAccount=(int)$a['id'];break;}
+$account=isset($_GET['account'])?(int)$_GET['account']:$defaultAccount;
+$year=(int)($_GET['year']??date('Y'));if($year<2000||$year>2100)$year=(int)date('Y');
+$month=(int)($_GET['month']??date('n'));if($month<0||$month>12)$month=(int)date('n'); // 0 = toute l'année
+$search=trim((string)($_GET['q']??''));
+$mCur=in_array($_GET['cur']??'',['USD','FC'],true)?$_GET['cur']:'FC';
+$mType=in_array($_GET['type']??'',['income','expense'],true)?$_GET['type']:'income';
+$accountName='Tous les comptes';foreach($accounts as $a)if((int)$a['id']===$account)$accountName=$a['name'];
+if($account&&$accountName==='Tous les comptes')$account=0;
+
+// 1) Une requête : libellé × mois × devise × type.
+$sql='SELECT TRIM(label) lbl,MONTH(tx_date) m,currency,type,SUM(amount) s,COUNT(*) n FROM transactions WHERE tx_date>=? AND tx_date<?'.($account?' AND account_id=?':'').' GROUP BY TRIM(label),MONTH(tx_date),currency,type';
+$st=$pdo->prepare($sql);$args=[sprintf('%04d-01-01',$year),sprintf('%04d-01-01',$year+1)];if($account)$args[]=$account;$st->execute($args);
+$norm=fn(string $v):string=>mb_strtolower(preg_replace('/\s+/u',' ',trim($v)),'UTF-8');
+$labels=[]; // clé normalisée => ['name'=>affichage,'d'=>[type][cur][m]=somme,'n'=>[m]=nb]
+foreach($st->fetchAll() as $r){
+  $name=(string)$r['lbl'];if($name==='')$name='(sans libellé)';$k=$norm($name);
+  if($search!==''&&mb_strpos($k,$norm($search))===false)continue;
+  $labels[$k]??=['name'=>$name,'d'=>[],'n'=>[]];
+  $labels[$k]['d'][$r['type']][$r['currency']][(int)$r['m']]=($labels[$k]['d'][$r['type']][$r['currency']][(int)$r['m']]??0)+(float)$r['s'];
+  $labels[$k]['n'][(int)$r['m']]=($labels[$k]['n'][(int)$r['m']]??0)+(int)$r['n'];
+}
+uasort($labels,fn($a,$b)=>strcmp($norm($a['name']),$norm($b['name'])));
+$sumPeriod=function(array $L,string $type,string $cur)use($month):float{$t=0.0;foreach($L['d'][$type][$cur]??[] as $m=>$v)if($month===0||$m===$month)$t+=$v;return $t;};
+$countPeriod=function(array $L)use($month):int{$t=0;foreach($L['n'] as $m=>$v)if($month===0||$m===$month)$t+=$v;return $t;};
+$rows=[];$tot=['income'=>['USD'=>0.0,'FC'=>0.0],'expense'=>['USD'=>0.0,'FC'=>0.0]];$totCount=0;
+foreach($labels as $L){
+  $n=$countPeriod($L);if(!$n)continue;
+  $row=['name'=>$L['name'],'n'=>$n];
+  foreach(['income','expense'] as $t)foreach(['USD','FC'] as $c){$row[$t.$c]=$sumPeriod($L,$t,$c);$tot[$t][$c]+=$row[$t.$c];}
+  $rows[]=$row;$totCount+=$n;
+}
+$periodLabel=$month===0?'toute l\'année '.$year:month_fr($month).' '.$year;
+
+// 2) Export CSV (libellé × 12 mois) — respecte compte, année et recherche.
+if(isset($_GET['csv'])){
+  header('Content-Type: text/csv; charset=UTF-8');header('Content-Disposition: attachment; filename="offrandes_par_libelle_'.$year.'.csv"');echo "\xEF\xBB\xBF";$o=fopen('php://output','w');
+  $safe=fn(string $v):string=>preg_match('/^[=+\-@\t\r]/',$v)?"'".$v:$v;$num=fn(float $v):string=>number_format($v,2,',','');
+  $head=['Libellé','Type','Devise'];for($m=1;$m<=12;$m++)$head[]=ucfirst(month_fr($m));$head[]='Total '.$year;fputcsv($o,$head,';');
+  foreach($labels as $L)foreach(['income'=>'Entrée','expense'=>'Sortie'] as $t=>$tl)foreach(['USD','FC'] as $c){if(empty($L['d'][$t][$c]))continue;$line=[$safe($L['name']),$tl,$c];$sum=0.0;for($m=1;$m<=12;$m++){$v=$L['d'][$t][$c][$m]??0.0;$sum+=$v;$line[]=$num($v);}$line[]=$num($sum);fputcsv($o,$line,';');}
+  fclose($o);exit;
+}
+
+// 3) Calcul mensuel du compte (entrées, sorties, solde du mois, solde cumulé reporté de mois en mois).
+$mx=month_matrix($year,$account);ensure_year($year);
+$ids=$account?[$account]:array_map(fn($a)=>(int)$a['id'],$accounts);
+$monthTable=[];
+foreach(['FC','USD'] as $cur){
+  $op=0.0;foreach($ids as $id)$op+=balance_for($id,$year,$cur)['opening_amount'];
+  for($m=1;$m<=12;$m++){$i=0.0;$e=0.0;foreach($ids as $id){$i+=$mx[$id][$cur][$m]['income']??0.0;$e+=$mx[$id][$cur][$m]['expense']??0.0;}
+    $monthTable[$cur][$m]=['open'=>$op,'in'=>$i,'out'=>$e,'net'=>$i-$e,'close'=>$op+$i-$e];$op+=$i-$e;}
+}
+$qs=fn(array $over=[])=>http_build_query(array_merge(['account'=>$account,'year'=>$year,'month'=>$month,'q'=>$search,'cur'=>$mCur,'type'=>$mType],$over));
+$page_title='Offrandes par mois et libellé';include 'partials/header.php';?>
+<div class="panel no-print"><div class="panel-head"><div><h2>Offrandes — somme par mois et par libellé</h2><p>Choisissez le compte, l'année et le mois ; tapez un mot du libellé (ex. « dîme », « action de grâce », « carburant ») pour obtenir sa somme.</p></div><a class="btn" href="offrandes.php?<?=h($qs(['csv'=>1]))?>">Exporter Excel (CSV)</a></div>
+<form class="filter-row"><select name="account"><option value="0">Tous les comptes</option><?php foreach($accounts as $a):?><option value="<?=$a['id']?>" <?=$account===(int)$a['id']?'selected':''?>><?=h($a['name'])?></option><?php endforeach?></select><select name="year"><?php for($y=(int)date('Y')+1;$y>=(int)date('Y')-10;$y--):?><option value="<?=$y?>" <?=$year===$y?'selected':''?>><?=$y?></option><?php endfor?></select><select name="month"><option value="0" <?=$month===0?'selected':''?>>Toute l'année</option><?php for($m=1;$m<=12;$m++):?><option value="<?=$m?>" <?=$month===$m?'selected':''?>><?=h(ucfirst(month_fr($m)))?></option><?php endfor?></select><input name="q" placeholder="Rechercher un libellé…" value="<?=h($search)?>"><input type="hidden" name="cur" value="<?=h($mCur)?>"><input type="hidden" name="type" value="<?=h($mType)?>"><button class="btn primary">Afficher</button></form></div>
+
+<div class="grid cards"><?php foreach([['income','Entrées'],['expense','Sorties']] as [$t,$tl]):?><article class="stat-card"><div class="stat-top"><span><?=$tl?> — <?=h($periodLabel)?><?=$search!==''?' · « '.h($search).' »':''?></span><span class="dot"></span></div><div class="stat-value"><?=money($tot[$t]['USD'],'USD')?></div><div class="stat-sub"><?=money($tot[$t]['FC'],'FC')?></div><div class="stat-foot"><?=h($accountName)?> · <?=$totCount?> opération(s)</div></article><?php endforeach?></div>
+
+<div class="panel"><h2>Somme par libellé — <?=h($periodLabel)?></h2><p><?=h($accountName)?>. Les libellés identiques (majuscules, espaces) sont additionnés ; USD et FC restent séparés.</p><div class="table-wrap"><table><thead><tr><th>Libellé</th><th>Opér.</th><th>Entrées USD</th><th>Entrées FC</th><th>Sorties USD</th><th>Sorties FC</th></tr></thead><tbody><?php foreach($rows as $r):?><tr><td><?=h($r['name'])?></td><td class="num"><?=$r['n']?></td><td class="num"><?=$r['incomeUSD']?money($r['incomeUSD'],'USD'):'—'?></td><td class="num"><?=$r['incomeFC']?money($r['incomeFC'],'FC'):'—'?></td><td class="num"><?=$r['expenseUSD']?money($r['expenseUSD'],'USD'):'—'?></td><td class="num"><?=$r['expenseFC']?money($r['expenseFC'],'FC'):'—'?></td></tr><?php endforeach?><?php if(!$rows):?><tr><td colspan="6" class="empty">Aucune opération pour cette période.</td></tr><?php else:?><tr><th>Total</th><th class="num"><?=$totCount?></th><th class="num"><?=money($tot['income']['USD'],'USD')?></th><th class="num"><?=money($tot['income']['FC'],'FC')?></th><th class="num"><?=money($tot['expense']['USD'],'USD')?></th><th class="num"><?=money($tot['expense']['FC'],'FC')?></th></tr><?php endif?></tbody></table></div></div>
+
+<div class="panel"><h2>Calcul mensuel — <?=h($accountName)?> <?=h($year)?></h2><p>Solde du mois = entrées − sorties. Solde cumulé = solde initial de l'année + tous les mois jusqu'au mois concerné.</p><?php foreach(['FC','USD'] as $cur):?><h3><?=$cur==='FC'?'Francs congolais (FC)':'Dollars (USD)'?></h3><div class="table-wrap"><table><thead><tr><th>Mois</th><th>Solde initial</th><th>Entrées</th><th>Sorties</th><th>Solde du mois</th><th>Solde cumulé</th></tr></thead><tbody><?php for($m=1;$m<=12;$m++):$r=$monthTable[$cur][$m];?><tr<?=$m===$month?' class="row-active"':''?>><td><a href="offrandes.php?<?=h($qs(['month'=>$m]))?>"><?=h(ucfirst(month_fr($m)))?></a></td><td class="num"><?=money($r['open'],$cur)?></td><td class="num"><?=money($r['in'],$cur)?></td><td class="num"><?=money($r['out'],$cur)?></td><td class="num"><?=money($r['net'],$cur)?></td><td class="num"><?=money($r['close'],$cur)?></td></tr><?php endfor?></tbody></table></div><?php endforeach?></div>
+
+<div class="panel"><div class="panel-head"><div><h2>Libellé × mois — <?=h($year)?></h2><p>Somme de chaque libellé, mois par mois (<?=$mType==='income'?'entrées':'sorties'?> en <?=h($mCur)?>).</p></div><div class="filter-actions no-print"><?php foreach([['FC','income','Entrées FC'],['USD','income','Entrées USD'],['FC','expense','Sorties FC'],['USD','expense','Sorties USD']] as [$c,$t,$tl]):?><a class="btn<?=$c===$mCur&&$t===$mType?' primary':''?>" href="offrandes.php?<?=h($qs(['cur'=>$c,'type'=>$t]))?>"><?=$tl?></a> <?php endforeach?></div></div><div class="table-wrap"><table class="matrix"><thead><tr><th>Libellé</th><?php for($m=1;$m<=12;$m++):?><th><?=h(mb_substr(ucfirst(month_fr($m)),0,4,'UTF-8'))?>.</th><?php endfor?><th>Total</th></tr></thead><tbody><?php $colTot=array_fill(1,12,0.0);$any=false;foreach($labels as $L):$d=$L['d'][$mType][$mCur]??[];if(!$d)continue;$any=true;$sum=array_sum($d);?><tr><td><?=h($L['name'])?></td><?php for($m=1;$m<=12;$m++):$v=$d[$m]??0.0;$colTot[$m]+=$v;?><td class="num"><?=$v?number_format($v,2,',',' '):'·'?></td><?php endfor?><td class="num"><?=number_format($sum,2,',',' ')?></td></tr><?php endforeach?><?php if(!$any):?><tr><td colspan="14" class="empty">Aucune donnée.</td></tr><?php else:?><tr><th>Total</th><?php for($m=1;$m<=12;$m++):?><th class="num"><?=$colTot[$m]?number_format($colTot[$m],2,',',' '):'·'?></th><?php endfor?><th class="num"><?=number_format(array_sum($colTot),2,',',' ')?></th></tr><?php endif?></tbody></table></div></div>
+<?php include 'partials/footer.php';?>

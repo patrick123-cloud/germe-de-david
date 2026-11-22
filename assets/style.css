@@ -27,3 +27,8 @@
 .sidebar nav.sidebar-nav::-webkit-scrollbar-thumb{background:#71839b;border-radius:8px}
 .sidebar nav.sidebar-nav::-webkit-scrollbar-thumb:hover{background:#aab8cc}
 .side-bottom{flex:0 0 auto}
+
+/* Images de marque : conserver le logo entier, sans recadrage ni déformation. */
+.brand-logo,.logo-preview,.report-head img,.welcome-brand img{object-fit:contain;max-width:100%;background:#fff;padding:3px;border-radius:8px}.church-preview,.welcome-photo{max-width:100%;height:auto;object-fit:contain}
+
+.row-active td{background:#fff8e6}.matrix th,.matrix td{white-space:nowrap}.matrix th:first-child,.matrix td:first-child{position:sticky;left:0;background:#fff;z-index:1}.panel h3{margin:18px 0 8px;font-size:15px}.filter-actions{display:flex;gap:6px;flex-wrap:wrap}
