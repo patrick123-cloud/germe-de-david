@@ -12,6 +12,29 @@ $mType=in_array($_GET['type']??'',['income','expense'],true)?$_GET['type']:'inco
 $accountName='Tous les comptes';foreach($accounts as $a)if((int)$a['id']===$account)$accountName=$a['name'];
 if($account&&$accountName==='Tous les comptes')$account=0;
 
+// 0) Suppression groupée (admin/trésorier) : aperçu puis confirmation écrite. Mois clôturés protégés.
+require_once __DIR__.'/bulk_delete_lib.php';
+$canDelete=in_array(role(),['admin','treasurer'],true);$flash=$_SESSION['flash']??'';unset($_SESSION['flash']);$bulkError='';$bulkPreview=null;
+$accountNames=[];foreach($accounts as $a)$accountNames[(int)$a['id']]=$a['name'];
+if($_SERVER['REQUEST_METHOD']==='POST'&&in_array($_POST['action']??'',['bulk_preview','bulk_delete'],true)){
+  check_csrf();require_role(['admin','treasurer']);
+  [$crit,$bulkError]=bulk_criteria($_POST,array_keys($accountNames));$bulkError=$bulkError??'';
+  if($bulkError===''){
+    $sel=bulk_select($pdo,$crit);
+    if($_POST['action']==='bulk_delete'){
+      if(($_POST['confirm_text']??'')!=='SUPPRIMER')$bulkError='Confirmation incorrecte : tapez exactement SUPPRIMER. Rien n\'a été supprimé.';
+      elseif(count($sel['rows'])!==(int)($_POST['expected']??-1))$bulkError='Les données ont changé depuis l\'aperçu. Rien n\'a été supprimé : refaites l\'aperçu.';
+      else{
+        try{$n=bulk_delete($pdo,$sel['rows'],bulk_describe($crit,$accountNames));
+          $_SESSION['flash']=$n.' opération(s) supprimée(s) et journalisée(s)'.($sel['locked']?' ; '.$sel['locked'].' ignorée(s) car le mois est clôturé':'').'.';
+          header('Location: offrandes.php?'.http_build_query(['account'=>$crit['account'],'year'=>$crit['year'],'month'=>$crit['month']]));exit;
+        }catch(Throwable $e){$bulkError='Échec de la suppression : aucune donnée n\'a été supprimée.';}
+      }
+    }
+    if($bulkError===''||$_POST['action']==='bulk_delete')$bulkPreview=['crit'=>$crit,'rows'=>$sel['rows'],'locked'=>$sel['locked'],'summary'=>bulk_summary($sel['rows']),'desc'=>bulk_describe($crit,$accountNames)];
+  }
+}
+
 // 1) Une requête : libellé × mois × devise × type.
 $sql='SELECT TRIM(label) lbl,MONTH(tx_date) m,currency,type,SUM(amount) s,COUNT(*) n FROM transactions WHERE tx_date>=? AND tx_date<?'.($account?' AND account_id=?':'').' GROUP BY TRIM(label),MONTH(tx_date),currency,type';
 $st=$pdo->prepare($sql);$args=[sprintf('%04d-01-01',$year),sprintf('%04d-01-01',$year+1)];if($account)$args[]=$account;$st->execute($args);
@@ -58,6 +81,28 @@ $qs=fn(array $over=[])=>http_build_query(array_merge(['account'=>$account,'year'
 $page_title='Offrandes par mois et libellé';include 'partials/header.php';?>
 <div class="panel no-print"><div class="panel-head"><div><h2>Offrandes — somme par mois et par libellé</h2><p>Choisissez le compte, l'année et le mois ; tapez un mot du libellé (ex. « dîme », « action de grâce », « carburant ») pour obtenir sa somme.</p></div><a class="btn" href="offrandes.php?<?=h($qs(['csv'=>1]))?>">Exporter Excel (CSV)</a></div>
 <form class="filter-row"><select name="account"><option value="0">Tous les comptes</option><?php foreach($accounts as $a):?><option value="<?=$a['id']?>" <?=$account===(int)$a['id']?'selected':''?>><?=h($a['name'])?></option><?php endforeach?></select><select name="year"><?php for($y=(int)date('Y')+1;$y>=(int)date('Y')-10;$y--):?><option value="<?=$y?>" <?=$year===$y?'selected':''?>><?=$y?></option><?php endfor?></select><select name="month"><option value="0" <?=$month===0?'selected':''?>>Toute l'année</option><?php for($m=1;$m<=12;$m++):?><option value="<?=$m?>" <?=$month===$m?'selected':''?>><?=h(ucfirst(month_fr($m)))?></option><?php endfor?></select><input name="q" placeholder="Rechercher un libellé…" value="<?=h($search)?>"><input type="hidden" name="cur" value="<?=h($mCur)?>"><input type="hidden" name="type" value="<?=h($mType)?>"><button class="btn primary">Afficher</button></form></div>
+
+<?php if($flash):?><div class="notice"><?=h($flash)?></div><?php endif?>
+<?php if($canDelete):?><details class="panel no-print bulk-del" <?=($bulkPreview||$bulkError)?'open':''?>><summary><b>Supprimer des offrandes (par libellé, mois ou type)</b></summary>
+<p>Choisissez ce qu'il faut supprimer, puis cliquez sur « Aperçu » : rien n'est supprimé avant votre confirmation. Les mois clôturés sont protégés. Chaque suppression est enregistrée dans le journal d'audit.</p>
+<?php if($bulkError):?><div class="alert"><?=h($bulkError)?></div><?php endif?>
+<form method="post" class="form-grid"><?=csrf_field()?><input type="hidden" name="action" value="bulk_preview">
+<div><label>Compte</label><select name="account"><option value="0">Tous les comptes</option><?php foreach($accounts as $a):?><option value="<?=$a['id']?>" <?=$account===(int)$a['id']?'selected':''?>><?=h($a['name'])?></option><?php endforeach?></select></div>
+<div><label>Année</label><select name="year"><?php for($y=(int)date('Y')+1;$y>=(int)date('Y')-10;$y--):?><option value="<?=$y?>" <?=$year===$y?'selected':''?>><?=$y?></option><?php endfor?></select></div>
+<div><label>Mois</label><select name="month"><option value="0" <?=$month===0?'selected':''?>>Toute l'année</option><?php for($m=1;$m<=12;$m++):?><option value="<?=$m?>" <?=$month===$m?'selected':''?>><?=h(ucfirst(month_fr($m)))?></option><?php endfor?></select></div>
+<div><label>Type</label><select name="type"><option value="">Entrées et sorties</option><option value="income">Entrées seulement</option><option value="expense">Sorties seulement</option></select></div>
+<div><label>Devise</label><select name="cur"><option value="">USD et FC</option><option value="USD">USD seulement</option><option value="FC">FC seulement</option></select></div>
+<div><label>Correspondance du libellé</label><select name="match"><option value="exact">Libellé identique (majuscules/espaces ignorés)</option><option value="contains">Libellé contenant le texte</option></select></div>
+<div class="span-2"><label>Libellé (facultatif — laisser vide pour tous les libellés)</label><input name="label" list="bulkLabels" autocomplete="off" placeholder="Ex. dîme, action de grâce…" value="<?=h($bulkPreview['crit']['label']??'')?>"><datalist id="bulkLabels"><?php foreach($labels as $L):?><option value="<?=h($L['name'])?>"><?php endforeach?></datalist></div>
+<div class="span-2"><button class="btn primary">Aperçu de la suppression</button></div></form>
+<?php if($bulkPreview):$bp=$bulkPreview;$cnt=count($bp['rows']);?><div class="bulk-preview"><h3>Aperçu : <?=h($bp['desc'])?></h3>
+<?php if($cnt===0):?><p>Aucune opération ne correspond<?=$bp['locked']?' ('.$bp['locked'].' opération(s) dans des mois clôturés sont protégées)':''?>.</p><?php else:?>
+<div class="table-wrap"><table><thead><tr><th>Compte</th><th>Type</th><th>Devise</th><th>Opér.</th><th>Montant total</th></tr></thead><tbody><?php foreach($bp['summary'] as $s):?><tr><td><?=h($s['account'])?></td><td><?=$s['type']==='income'?'Entrée':'Sortie'?></td><td><?=h($s['currency'])?></td><td class="num"><?=$s['n']?></td><td class="num"><?=money($s['sum'],$s['currency'])?></td></tr><?php endforeach?></tbody></table></div>
+<details><summary>Voir les <?=min($cnt,200)?> premières opérations</summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Compte</th><th>Type</th><th>Libellé</th><th>Montant</th></tr></thead><tbody><?php foreach(array_slice($bp['rows'],0,200) as $r):?><tr><td><?=date('d/m/Y',strtotime($r['tx_date']))?></td><td><?=h($r['account_name'])?></td><td><?=$r['type']==='income'?'Entrée':'Sortie'?></td><td><?=h($r['label'])?></td><td class="num"><?=money($r['amount'],$r['currency'])?></td></tr><?php endforeach?></tbody></table></div></details>
+<?php if($bp['locked']):?><p class="alert"><?=$bp['locked']?> opération(s) dans des mois clôturés ne seront pas supprimées.</p><?php endif?>
+<div class="alert"><strong><?=$cnt?> opération(s) seront définitivement supprimées.</strong> Téléchargez une sauvegarde avant si nécessaire.</div>
+<form method="post" class="stack"><?=csrf_field()?><input type="hidden" name="action" value="bulk_delete"><input type="hidden" name="expected" value="<?=$cnt?>"><?php foreach(['account','year','month','type','cur','label','match'] as $f):?><input type="hidden" name="<?=$f?>" value="<?=h($bp['crit'][$f])?>"><?php endforeach?><label>Tapez exactement : SUPPRIMER</label><input name="confirm_text" autocomplete="off" required placeholder="SUPPRIMER"><button class="btn primary" onclick="return confirm('Supprimer définitivement <?=$cnt?> opération(s) ?')">Supprimer définitivement</button></form>
+<?php endif?></div><?php endif?></details><?php endif?>
 
 <div class="grid cards"><?php foreach([['income','Entrées'],['expense','Sorties']] as [$t,$tl]):?><article class="stat-card"><div class="stat-top"><span><?=$tl?> — <?=h($periodLabel)?><?=$search!==''?' · « '.h($search).' »':''?></span><span class="dot"></span></div><div class="stat-value"><?=money($tot[$t]['USD'],'USD')?></div><div class="stat-sub"><?=money($tot[$t]['FC'],'FC')?></div><div class="stat-foot"><?=h($accountName)?> · <?=$totCount?> opération(s)</div></article><?php endforeach?></div>
 
