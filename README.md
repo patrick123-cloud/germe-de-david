@@ -57,3 +57,33 @@ Les catégories peuvent maintenant être choisies à la saisie d'une recette ou 
 - **Correction** : le « solde cumulé » du modèle Offrandes ordinaires comptait deux fois les mois précédents ; le solde cumulé des Offrandes spéciales partait du solde de début d'année au lieu du début du mois.
 - **Rapidité** : le tableau de bord passe d'environ 250 requêtes SQL à 7, les rapports d'environ 630 à 11 ; la liste des opérations ne fait plus une requête par ligne. Requêtes préparées émulées (1 aller-retour réseau par requête vers TiDB ; `DB_EMULATE=0` pour désactiver), OPcache, compression gzip, cache navigateur des CSS/JS/images, `health.php` pour le contrôle de santé Render.
 - Base existante : exécuter une seule fois `tidb_upgrade_v2.sql` (nouvel index). Voir `GUIDE_DEPLOIEMENT.md`.
+
+## Version 3 — suppression groupée des offrandes
+
+- Page « Offrandes par mois » → panneau **« Supprimer des offrandes (par libellé, mois ou type) »** (administrateur et trésorier).
+- Critères : compte, année, mois (ou toute l'année), type (entrées / sorties), devise, libellé (identique ou contenant).
+- Déroulement : **Aperçu** (nombre et totaux par compte/devise/type, liste des opérations) → saisir `SUPPRIMER` → suppression définitive.
+- Sécurités : mois clôturés jamais supprimés ; toute l'année sans type ni libellé refusée (utiliser « Réinitialiser les données ») ; suppression en une seule transaction (tout ou rien) ; chaque ligne supprimée est conservée dans le journal d'audit (`DELETE_BULK`).
+- Fonctionne en local (XAMPP) et en ligne (Render + TiDB) : même code, chaque installation agit sur **sa propre base**. Pour nettoyer les deux, répétez la suppression des deux côtés.
+- Aucune modification de la base de données n'est nécessaire. Nouveau fichier : `bulk_delete_lib.php`.
+
+## Version 4 — recherche, rapports périodiques, catégories, impression avec zoom
+
+**Conservation des données** : aucune opération existante n'est modifiée ni supprimée. La seule modification de la base est l'ajout (automatique) de la colonne `transactions.category_name`.
+
+- **Recherche** (menu « Recettes / dépenses ») : par jour précis, par mois, par année, période libre ou global ; texte sur le libellé et la catégorie ; filtres compte, type, devise ; totaux (entrées, sorties, solde) de tous les résultats ; pagination ; export CSV avec les mêmes filtres. « Offrandes par mois » accepte aussi un jour précis et liste les opérations correspondant au libellé cherché.
+- **Fiche d'opération** (`operation.php`) : détail complet de chaque opération (date, compte, catégorie, libellé, montant, solde du compte après l'opération, auteur, historique) et impression individuelle. Lien « Fiche » et « Imprimer » sur chaque ligne.
+- **Suppression d'une opération mal saisie** : bouton « Supprimer » sur la ligne (recherche, rapport détaillé, fiche). La ligne est supprimée, une copie complète reste dans le journal d'audit ; les mois clôturés restent protégés ; réservé administrateur/trésorier.
+- **Rapports entrées / sorties** (`rapport_periodique.php`, menu « Entrées / sorties ») : détail de chaque opération avec solde courant, ou totaux par jour, semaine (ISO), mois, année, pour un jour, un mois, une année, une période ou le rapport global. Pour chaque période : entrées, sorties, solde restant (entrées − sorties) et solde cumulé (report initial + solde). USD et FC séparés.
+- **Rapports par catégorie** (`categories_rapport.php`) : « séparé » = chaque catégorie telle qu'enregistrée (Dîme, DÎME et dîme restent distinctes), avec chaque opération sur sa ligne ; « regroupé » = catégories identiques additionnées sans tenir compte de la casse (les variantes regroupées sont listées).
+- **Catégorie dans son propre champ** : colonne `transactions.category_name`. À la saisie : texte libre > catégorie prédéfinie > libellé.
+- **Aperçu avant impression avec zoom** : bouton « Aperçu et impression » (rapports, recherche, fiche, offrandes, inventaires) → fenêtre d'aperçu avec zoom 30–250 % (boutons, curseur, Ctrl + molette), « Ajuster à la largeur », orientation, format de papier (A4/A5/Letter), puis « Imprimer / PDF ». Le zoom choisi est appliqué à l'impression.
+- **Mise à jour et réparation** (`repair.php`, administrateur) : ajoute la colonne si absente, remplit la catégorie de chaque opération déjà enregistrée, recrée les soldes initiaux annuels manquants, signale les doublons probables et les clôtures incohérentes (sans rien supprimer). Se lance **automatiquement** à la première connexion d'un administrateur après le déploiement ; relançable à la main. Script SQL équivalent : `tidb_upgrade_v4.sql` (facultatif).
+
+## Version 5 — catégories, comptes, mois clôturés
+
+- **Erreur 1062 `uq_category` corrigée** : la base compare sans tenir compte des majuscules ni des accents (« CARBURANT » = « Carburant »). L'ajout d'une catégorie ou d'un compte déjà existant affiche maintenant un message au lieu de planter.
+- **Catégorie automatique** : en enregistrant une opération, un libellé (ou une catégorie saisie) qui n'est pas encore configuré est ajouté aux catégories du compte. Le rapport « Somme des dépenses » utilise la catégorie enregistrée : plus de ligne « Autres ».
+- **Comptes & catégories** : suppression d'une catégorie (les opérations gardent son nom), désactivation / réactivation d'un compte, suppression d'un compte (avec ses opérations seulement si l'on tape SUPPRIMER ; copie dans le journal d'audit), bouton « Importer les libellés déjà saisis » pour créer les catégories des anciennes opérations.
+- **Mois clôturé** : Rapports & inventaires → « Rouvrir ou réinitialiser un mois clôturé » (administrateur) : *rouvrir* déverrouille le mois, *réinitialiser* rouvre puis refait la clôture avec les chiffres actuels.
+- Aucune modification de la base de données n'est nécessaire.

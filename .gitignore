@@ -1,5 +1,13 @@
-uploads/*
-!uploads/.htaccess
+﻿# Configuration et secrets
+.env
+.env.*
+!.env.example
+
+# Sauvegardes
 *.sql.bak
 backup_*.sql
-.env
+*.bak
+
+# Téléversements
+uploads/*
+!uploads/.htaccess

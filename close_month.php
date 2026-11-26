@@ -1,1 +1,20 @@
-<?php require_once 'config.php';require_role(['admin','treasurer']);if($_SERVER['REQUEST_METHOD']!=='POST'){header('Location: reports.php');exit;}check_csrf();$year=(int)$_POST['year'];$month=(int)$_POST['month'];$only=(int)($_POST['account_id']??0);if($month<1||$month>12||$year<2000||$year>2100)exit('Période invalide.');$pdo=db();ensure_year($year);$accounts=$only?$pdo->prepare('SELECT id FROM accounts WHERE id=? AND active=1'):$pdo->prepare('SELECT id FROM accounts WHERE active=1');if($only)$accounts->execute([$only]);else $accounts->execute();$list=$accounts->fetchAll();$start=sprintf('%04d-%02d-01',$year,$month);$end=date('Y-m-d',strtotime($start.' +1 month'));$pdo->beginTransaction();try{foreach($list as $a)foreach(['USD','FC'] as $cur){$exists=$pdo->prepare('SELECT id FROM monthly_inventories WHERE account_id=? AND year=? AND month=? AND currency=? FOR UPDATE');$exists->execute([$a['id'],$year,$month,$cur]);if($exists->fetch())throw new RuntimeException('Clôture déjà effectuée pour un compte/devise. Aucune modification enregistrée.');$b=balance_for((int)$a['id'],$year,$cur);$prior=$pdo->prepare("SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0) FROM transactions WHERE account_id=? AND currency=? AND tx_date>=? AND tx_date<?");$prior->execute([$a['id'],$cur,sprintf('%04d-01-01',$year),$start]);$opening=(float)$b['opening_amount']+(float)$prior->fetchColumn();$q=$pdo->prepare("SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0),COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) FROM transactions WHERE account_id=? AND currency=? AND tx_date>=? AND tx_date<?");$q->execute([$a['id'],$cur,$start,$end]);[$inc,$exp]=$q->fetch(PDO::FETCH_NUM);$close=$opening+(float)$inc-(float)$exp;$ins=$pdo->prepare('INSERT INTO monthly_inventories(account_id,year,month,currency,opening_amount,income,expense,closing_amount,closed_by) VALUES(?,?,?,?,?,?,?,?,?)');$ins->execute([$a['id'],$year,$month,$cur,$opening,$inc,$exp,$close,$_SESSION['user_id']]);}audit('CLOSE','monthly_inventories',null,"Clôture $year-$month compte $only");$pdo->commit();header("Location: reports.php?year=$year&month=$month&account=$only&closed=1");exit;}catch(Throwable $e){$pdo->rollBack();http_response_code(409);echo '<h2>Clôture non effectuée</h2><p>'.h($e->getMessage()).'</p><a href="reports.php">Retour aux rapports</a>'; }
+<?php require_once 'config.php';require_once 'close_lib.php';require_role(['admin','treasurer']);
+if($_SERVER['REQUEST_METHOD']!=='POST'){header('Location: reports.php');exit;}
+check_csrf();
+$year=(int)($_POST['year']??0);$month=(int)($_POST['month']??0);$only=(int)($_POST['account_id']??0);
+if($month<1||$month>12||$year<2000||$year>2100)exit('Période invalide.');
+$pdo=db();ensure_year($year);
+$st=$only?$pdo->prepare('SELECT id FROM accounts WHERE id=? AND active=1'):$pdo->prepare('SELECT id FROM accounts WHERE active=1');
+if($only)$st->execute([$only]);else $st->execute();
+$ids=array_map('intval',array_column($st->fetchAll(),'id'));
+$pdo->beginTransaction();
+try{
+  close_month_accounts($pdo,$year,$month,$ids,(int)$_SESSION['user_id']);
+  audit('CLOSE','monthly_inventories',null,"Clôture $year-$month compte $only");
+  $pdo->commit();
+  header("Location: reports.php?year=$year&month=$month&account=$only&closed=1");exit;
+}catch(Throwable $e){
+  if($pdo->inTransaction())$pdo->rollBack();
+  http_response_code(409);
+  echo '<h2>Clôture non effectuée</h2><p>'.h($e->getMessage()).'</p><a href="reports.php?year='.$year.'&month='.$month.'">Retour aux rapports</a>';
+}

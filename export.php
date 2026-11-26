@@ -1,1 +1,21 @@
-<?php require_once 'config.php';require_login();$from=$_GET['from']??date('Y-m-01');$to=$_GET['to']??date('Y-m-d');$search=trim($_GET['search']??'');$cat=(int)($_GET['cat']??0);$type=$_GET['type']??'';$params=[$from,$to];$w='t.tx_date BETWEEN ? AND ?';if($search!==''){$w.=' AND (t.label LIKE ? OR t.description LIKE ? OR c.name LIKE ?)';array_push($params,"%$search%","%$search%","%$search%");}if($cat){$w.=' AND t.category_id=?';$params[]=$cat;}if(in_array($type,['income','expense'],true)){$w.=' AND t.type=?';$params[]=$type;}$q=db()->prepare("SELECT t.tx_date,a.name account_name,t.type,c.name category,t.label,t.description,t.currency,t.amount,u.full_name creator FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN categories c ON c.id=t.category_id LEFT JOIN users u ON u.id=t.created_by WHERE $w ORDER BY t.tx_date,t.id");$q->execute($params);header('Content-Type: text/csv; charset=UTF-8');header('Content-Disposition: attachment; filename="rapport_financier_'.$from.'_'.$to.'.csv"');echo "\xEF\xBB\xBF";$o=fopen('php://output','w');fputcsv($o,['Date','Compte','Type','Catégorie','Libellé','Description','Devise','Montant','Enregistré par'],';');while($r=$q->fetch())fputcsv($o,$r,';');fclose($o);
+<?php
+// Export CSV (Excel) des opérations : mêmes filtres que la recherche (période, compte, devise, type, texte).
+require_once 'tx_lib.php';
+require_login();
+$per = period_resolve(period_from_request($_GET, 'month'), $_GET);
+[$where, $params] = tx_filters($_GET, $per);
+$cat = (int)($_GET['cat'] ?? 0);   // ancien paramètre : identifiant de catégorie prédéfinie
+if ($cat) { $where .= ' AND t.category_id=?'; $params[] = $cat; }
+$q = db()->prepare('SELECT t.tx_date,a.name account_name,t.type,' . tx_cat_expr() . ' category,t.label,t.description,t.currency,t.amount,u.full_name creator FROM ' . tx_from_sql() . " WHERE $where ORDER BY t.tx_date,t.id");
+$q->execute($params);
+$safe = fn($v) => is_string($v) && preg_match('/^[=+\-@\t\r]/', $v) ? "'" . $v : $v;   // protection contre l'injection de formules Excel
+header('Content-Type: text/csv; charset=UTF-8');
+header('Content-Disposition: attachment; filename="rapport_financier_' . $per['from'] . '_' . $per['to'] . '.csv"');
+echo "\xEF\xBB\xBF";
+$o = fopen('php://output', 'w');
+fputcsv($o, ['Date', 'Compte', 'Type', 'Catégorie', 'Libellé', 'Description', 'Devise', 'Montant', 'Enregistré par'], ';');
+while ($r = $q->fetch()) {
+    $r['type'] = $r['type'] === 'income' ? 'Entrée' : 'Sortie';
+    fputcsv($o, array_map($safe, $r), ';');
+}
+fclose($o);
