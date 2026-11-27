@@ -1,0 +1,2 @@
+# Encodage HTTP par défaut pour les pages servies par Apache.
+AddDefaultCharset UTF-8

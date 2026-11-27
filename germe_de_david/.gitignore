@@ -1,0 +1,5 @@
+uploads/*
+!uploads/.htaccess
+*.sql.bak
+backup_*.sql
+.env
