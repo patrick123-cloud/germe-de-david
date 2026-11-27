@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 // Offrandes : calcul mensuel + somme par libellÃ© (mois, annÃ©e) â€” une seule requÃªte groupÃ©e, calculs en mÃ©moire.
 require_once 'tx_lib.php';require_login();$pdo=db();
 $accounts=active_accounts();
